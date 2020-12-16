@@ -14,6 +14,7 @@ import six
 import socket
 import time
 import torch
+from tqdm import tqdm
 
 import thumt.data as data
 import torch.distributed as dist
@@ -225,12 +226,22 @@ def main(args):
         top_beams = params.top_beams
         decode_batch_size = params.decode_batch_size
 
+        # count eval dataset
+        total_len = 0
+        for sample in iterator:
+            total_len += 1
+        iterator = iter(dataset)
+
         # Buffers for synchronization
         size = torch.zeros([dist.get_world_size()]).long()
         t_list = [torch.empty([decode_batch_size, top_beams, pad_max]).long()
                   for _ in range(dist.get_world_size())]
 
         all_outputs = []
+
+        if dist.rank() == 0:
+            pbar = tqdm(total=total_len)
+            pbar.set_description("Translating to {}".format(args.output))
 
         while True:
             try:
@@ -303,10 +314,11 @@ def main(args):
 
                     all_outputs.append(beam_seqs)
 
-            t = time.time() - t
-            print("Finished batch: %d (%.3f sec)" % (counter, t))
+            if dist.get_rank() == 0:
+                pbar.update(1)
 
         if dist.get_rank() == 0:
+            pbar.close()
             restored_outputs = []
             if sorted_key is not None:
                 for idx in range(len(all_outputs)):
